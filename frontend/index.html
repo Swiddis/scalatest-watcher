@@ -2,50 +2,61 @@
 <html>
   <head>
     <title>JUnit Live Viewer</title>
+    <style>
+        td {
+            padding: 2px;
+        }
+    </style>
   </head>
   <body>
     <h1>JUnit Test Results</h1>
     <pre id="results-body"></pre>
     <script>
-      const state = {};
+      const rowMap = new Map();
 
-      function renderTable() {
-        const tbody = document.getElementById("results-body");
-        tbody.innerHTML = "";
+      const getTestId = (suite, testCase) =>
+        `${suite.name || "unknown"}::${testCase.name}`;
 
-        for (const [path, suiteData] of Object.entries(state)) {
-          const suites = suiteData.suites || [];
-          for (const suite of suites) {
-            const cases = suite.cases || [];
-            for (const testCase of cases) {
-              const row = document.createElement("tr");
+      function updateTestRow(suite, testCase, path) {
+        const testId = getTestId(suite, testCase);
+        let row = rowMap.get(testId);
 
-              const nameCell = document.createElement("td");
-              nameCell.textContent = testCase.original_name || testCase.name;
+        if (!row) {
+          row = document.createElement("tr");
 
-              const statusCell = document.createElement("td");
-              statusCell.textContent = testCase.status;
-              statusCell.style.color =
-                testCase.status === "Success" ? "green" : "red";
+          const nameCell = document.createElement("td");
+          const statusCell = document.createElement("td");
+          const timeCell = document.createElement("td");
+          const suiteCell = document.createElement("td");
 
-              const timeCell = document.createElement("td");
-              timeCell.textContent = testCase.time;
+          row.append(nameCell, statusCell, timeCell, suiteCell);
+          row.dataset.testId = testId;
 
-              const suiteCell = document.createElement("td");
-              suiteCell.textContent = suite.name || path;
-
-              row.append(nameCell, statusCell, timeCell, suiteCell);
-              tbody.appendChild(row);
-            }
-          }
+          rowMap.set(testId, row);
+          document.getElementById("results-body").appendChild(row);
         }
+
+        const [nameCell, statusCell, timeCell, suiteCell] = row.children;
+
+        nameCell.textContent = testCase.original_name || testCase.name;
+        const status = testCase.status === "Success" ? testCase.status : Object.keys(testCase.status)[0];
+
+        statusCell.textContent = status;
+        statusCell.style.color =
+          testCase.status === "Success" ? "green" : "red";
+        timeCell.textContent = testCase.time;
+        suiteCell.textContent = suite.name || path;
       }
 
       const ws = new WebSocket("ws://localhost:3000/ws");
       ws.onmessage = (event) => {
         const [path, suite] = JSON.parse(event.data);
-        state[path] = suite;
-        renderTable();
+
+        for (const s of suite.suites || []) {
+          for (const c of s.cases || []) {
+            updateTestRow(s, c, path);
+          }
+        }
       };
 
       fetch("http://localhost:3000/refresh", { method: "POST" });
