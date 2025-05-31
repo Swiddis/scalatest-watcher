@@ -1,8 +1,14 @@
 use chrono::Local;
-use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Result, Watcher};
+use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
+
+#[derive(serde::Deserialize, Clone)]
+struct WatchConfig {
+    pub path: String,
+    pub polling_rate_ms: Option<u64>,
+}
 
 fn handle(event: Event) {
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -26,7 +32,7 @@ fn handle(event: Event) {
     }
 }
 
-fn listen(rx: Receiver<Result<Event>>) {
+fn listen(rx: Receiver<notify::Result<Event>>) {
     loop {
         let event = rx.recv().unwrap();
         match event {
@@ -36,29 +42,39 @@ fn listen(rx: Receiver<Result<Event>>) {
     }
 }
 
-fn watch(watch_path: &str, tx: Sender<Result<Event>>) {
+fn watch(config: &WatchConfig, tx: Sender<notify::Result<Event>>) {
     let mut watcher = Box::new(
         RecommendedWatcher::new(
             tx,
-            Config::default().with_poll_interval(Duration::from_secs(1)),
+            Config::default().with_poll_interval(Duration::from_millis(config.polling_rate_ms.unwrap_or(1000))),
         )
         .unwrap(),
     );
 
     watcher
-        .watch(Path::new(watch_path), RecursiveMode::Recursive)
+        .watch(Path::new(&config.path), RecursiveMode::Recursive)
         .unwrap();
 
     Box::leak(watcher);
 }
 
-fn main() {
-    let watch_path = "~/code/opensearch-spark/target/test-reports";
+fn load_config() -> Result<WatchConfig, config::ConfigError> {
+    let base_path = std::env::current_dir().expect("Failed to determine the current directory");
 
-    eprintln!("Starting directory watcher for: {}", watch_path);
+    let settings = config::Config::builder()
+        .add_source(config::File::from(base_path.join("config.toml")))
+        .add_source(config::Environment::with_prefix("SC_WATCH_"))
+        .build()?;
+    settings.try_deserialize::<WatchConfig>()
+}
+
+fn main() {
+    let config = load_config().unwrap();
+
+    eprintln!("Starting directory watcher for: {}", config.path);
 
     let (tx, rx) = channel();
-    watch(watch_path, tx);
+    watch(&config, tx);
 
     eprintln!("Press Ctrl+C to stop...");
 
