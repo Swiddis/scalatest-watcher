@@ -1,6 +1,10 @@
-use chrono::Local;
+use anyhow::Context;
+use junit_parser::TestSuites;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::path::Path;
+use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 #[derive(serde::Deserialize, Clone)]
@@ -8,52 +12,87 @@ struct WatchConfig {
     pub path: String,
 }
 
-fn handle(event: Event) {
-    let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+fn parse_suite(path: &PathBuf) -> Result<TestSuites, anyhow::Error> {
+    let xml = std::fs::read_to_string(path).context("failed to load JUnit suite data")?;
+    let cursor = Cursor::new(xml);
+    junit_parser::from_reader(cursor).context("failed to parse JUnit XML")
+}
 
+fn update_suite(
+    path: &PathBuf,
+    suites: &mut HashMap<String, TestSuites>,
+    skip_if_absent: bool,
+) -> Result<(), anyhow::Error> {
+    let display = path.display().to_string();
+    if skip_if_absent && suites.contains_key(&display) {
+        return Ok(());
+    }
+
+    let suite = parse_suite(path)?;
+    suites.insert(display, suite);
+    Ok(())
+}
+
+fn handle(event: Event, suites: &mut HashMap<String, TestSuites>) -> Result<(), anyhow::Error> {
     match event.kind {
-        EventKind::Create(_) => {
-            println!("[{}] Created: {:?}", timestamp, event.paths);
-        }
         EventKind::Modify(_) => {
-            println!("[{}] Modified: {:?}", timestamp, event.paths);
+            for path in event.paths {
+                if !path.is_file() {
+                    continue;
+                }
+
+                update_suite(&path, suites, false)?;
+            }
+        }
+        // We need this to be distinct from `Modify` to avoid an infinite loop
+        // of Access events causing new Access events
+        EventKind::Create(_) | EventKind::Access(_) => {
+            for path in event.paths {
+                if !path.is_file() {
+                    continue;
+                }
+
+                update_suite(&path, suites, true)?;
+            }
         }
         EventKind::Remove(_) => {
-            println!("[{}] Removed: {:?}", timestamp, event.paths);
-        }
-        EventKind::Access(_) => {
-            println!("[{}] Accessed: {:?}", timestamp, event.paths);
+            for path in event.paths {
+                suites.remove(&path.display().to_string());
+            }
         }
         _ => {
             // no-op
         }
     }
+
+    Ok(())
 }
 
 fn listen(rx: Receiver<notify::Result<Event>>) {
+    let mut suites: HashMap<String, TestSuites> = HashMap::new();
+
     loop {
         let event = rx.recv().unwrap();
         match event {
-            Ok(event) => handle(event),
+            Ok(event) => handle(event, &mut suites).expect("io error while handling event"),
             Err(e) => println!("Watch error: {:?}", e),
         }
     }
 }
 
 fn watch(config: &WatchConfig, tx: Sender<notify::Result<Event>>) {
-    let mut watcher = Box::new(
-        RecommendedWatcher::new(
-            tx,
-            Config::default(),
-        )
-        .unwrap(),
-    );
-
+    let mut watcher = Box::new(RecommendedWatcher::new(tx, Config::default()).unwrap());
     watcher
         .watch(Path::new(&config.path), RecursiveMode::Recursive)
         .unwrap();
-
     Box::leak(watcher);
+
+    // Generate access events to register all files with the listener
+    for entry in walkdir::WalkDir::new(&config.path).into_iter().flatten() {
+        if entry.metadata().unwrap().is_file() {
+            let _ = OpenOptions::new().read(true).open(entry.path());
+        }
+    }
 }
 
 fn load_config() -> Result<WatchConfig, config::ConfigError> {

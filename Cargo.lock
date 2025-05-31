@@ -18,6 +18,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.98"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
+
+[[package]]
 name = "arraydeque"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -372,6 +378,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "junit-parser"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f68b8fa538f003a756a95defe9c6cb1a47f69249551ccb4b93bf00ac187a3ec6"
+dependencies = [
+ "quick-xml",
+ "thiserror",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -543,6 +559,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-xml"
+version = "0.37.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "331e97a1af0bf59823e6eadffe373d7b27f485be8748f71471c662c1f269b7fb"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -608,10 +633,13 @@ dependencies = [
 name = "scalatest-watcher"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "config",
+ "junit-parser",
  "notify",
  "serde",
+ "walkdir",
 ]
 
 [[package]]
