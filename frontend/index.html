@@ -3,16 +3,36 @@
   <head>
     <title>JUnit Live Viewer</title>
     <style>
-        td {
-            padding: 2px;
-        }
+      td {
+        padding: 3px;
+      }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   </head>
   <body>
     <h1>JUnit Test Results</h1>
+
+    <div style="display: flex; gap: 20px">
+      <div width="300" height="200">
+        <canvas id="status-chart"></canvas>
+      </div>
+      <div width="300" height="200">
+        <canvas id="duration-chart"></canvas>
+      </div>
+      <div width="300" height="200">
+        <canvas id="throughput-chart"></canvas>
+      </div>
+    </div>
     <pre id="results-body"></pre>
+
     <script>
+      // First is the table rendering, then the charts
+
       const rowMap = new Map();
+      const dataMap = new Map();
+      let statusCounts = { Success: 0, Failure: 0, Skipped: 0 };
+      let durations = [];
+      let timestamps = [];
 
       const getTestId = (suite, testCase) =>
         `${suite.name || "unknown"}::${testCase.name}`;
@@ -39,13 +59,22 @@
         const [nameCell, statusCell, timeCell, suiteCell] = row.children;
 
         nameCell.textContent = testCase.original_name || testCase.name;
-        const status = testCase.status === "Success" ? testCase.status : Object.keys(testCase.status)[0];
+        const status =
+          testCase.status === "Success"
+            ? testCase.status
+            : Object.keys(testCase.status)[0];
 
         statusCell.textContent = status;
         statusCell.style.color =
           testCase.status === "Success" ? "green" : "red";
         timeCell.textContent = testCase.time;
         suiteCell.textContent = suite.name || path;
+
+        dataMap.set(testId, {
+          status,
+          timestamp: suite.timestamp,
+          duration: testCase.time
+        });
       }
 
       const ws = new WebSocket("ws://localhost:3000/ws");
@@ -60,6 +89,113 @@
       };
 
       fetch("http://localhost:3000/refresh", { method: "POST" });
+
+      const statusChart = new Chart(document.getElementById("status-chart"), {
+        type: "pie",
+        data: {
+          labels: ["Success", "Failure", "Skipped"],
+          datasets: [
+            {
+              data: [0, 0, 0],
+              backgroundColor: ["green", "red", "gray"],
+            },
+          ],
+        },
+      });
+
+      const durationChart = new Chart(
+        document.getElementById("duration-chart"),
+        {
+          type: "bar",
+          data: {
+            labels: [],
+            datasets: [
+              {
+                label: "Test durations (ms)",
+                data: [],
+                backgroundColor: "blue",
+              },
+            ],
+          },
+          options: {
+            scales: { x: { title: { display: true, text: "Test index" } } },
+          },
+        }
+      );
+
+      const throughputChart = new Chart(
+        document.getElementById("throughput-chart"),
+        {
+          type: "line",
+          data: {
+            labels: [],
+            datasets: [
+              {
+                label: "Test results / sec",
+                data: [],
+                borderColor: "purple",
+                fill: false,
+              },
+            ],
+          },
+        }
+      );
+
+      function updateChartData() {
+        statusCounts = { Success: 0, Skipped: 0, Failure: 0 };
+        durations = [];
+        timestamps = [];
+
+        for (const entry of dataMap.values()) {
+          switch (entry.status) {
+            case 'Success':
+              statusCounts.Success += 1;
+              break;
+            case 'Skipped':
+              statusCounts.Skipped += 1;
+              break;
+            case 'Failure':
+              statusCounts.Failure += 1;
+              break;
+          }
+          
+          durations.push(new Number(entry.duration));
+          timestamps.push(new Date(entry.timestamp));
+        }
+      }
+
+      function updateCharts() {
+        updateChartData();
+
+        statusChart.data.datasets[0].data = [
+          statusCounts.Success,
+          statusCounts.Failure,
+          statusCounts.Skipped,
+        ];
+        statusChart.update();
+
+        durationChart.data.labels = durations.map((_, i) => i + 1);
+        durationChart.data.datasets[0].data = durations;
+        durationChart.update();
+
+        const bins = {};
+        for (const t of timestamps) {
+          const sec = Math.floor(t);
+          bins[sec] = (bins[sec] || 0) + 1;
+        }
+        const sortedSecs = Object.keys(bins).sort();
+        throughputChart.data.labels = sortedSecs;
+        throughputChart.data.datasets[0].data = sortedSecs.map(
+          (sec) => bins[sec]
+        );
+        throughputChart.update();
+      }
+
+      function slowPollCharts() {
+        updateCharts();
+        setTimeout(slowPollCharts, 1000);
+      }
+      slowPollCharts();
     </script>
   </body>
 </html>
