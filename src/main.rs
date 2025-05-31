@@ -1,4 +1,5 @@
 use anyhow::Context;
+use axum::http::StatusCode;
 use junit_parser::TestSuites;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
@@ -110,19 +111,27 @@ async fn ws_handler(
     })
 }
 
-fn watch(config: &WatchConfig, tx: Sender<notify::Result<Event>>) {
+/// Generate access events to register all files with the listener
+fn start_refresh(config: WatchConfig) -> impl axum::response::IntoResponse {
+    let conf_clone = config.clone();
+    std::thread::spawn(move || {
+        for entry in walkdir::WalkDir::new(conf_clone.path).into_iter().flatten() {
+            if entry.metadata().unwrap().is_file() {
+                let _ = OpenOptions::new().read(true).open(entry.path());
+            }
+        }
+    });
+
+    StatusCode::CREATED
+}
+
+fn watch(config: WatchConfig, tx: Sender<notify::Result<Event>>) {
     let mut watcher = Box::new(RecommendedWatcher::new(tx, Config::default()).unwrap());
     watcher
         .watch(Path::new(&config.path), RecursiveMode::Recursive)
         .unwrap();
     Box::leak(watcher);
-
-    // Generate access events to register all files with the listener
-    for entry in walkdir::WalkDir::new(&config.path).into_iter().flatten() {
-        if entry.metadata().unwrap().is_file() {
-            let _ = OpenOptions::new().read(true).open(entry.path());
-        }
-    }
+    start_refresh(config);
 }
 
 fn load_config() -> Result<WatchConfig, config::ConfigError> {
@@ -144,8 +153,9 @@ async fn main() {
     let (tx_file, rx_file) = channel();
     let (tx_ws, _) = broadcast::channel::<String>(16);
 
+    let conf_clone = config.clone();
     std::thread::spawn(move || {
-        watch(&config, tx_file);
+        watch(conf_clone, tx_file);
     });
 
     let tx_ws_clone = tx_ws.clone();
@@ -155,12 +165,15 @@ async fn main() {
 
     let serve_dir = tower_http::services::ServeDir::new("frontend");
 
-    let app = axum::Router::new()
-        .route("/state", axum::routing::get({}))
+    let conf_clone = config.clone();
+    let app: axum::Router = axum::Router::new()
         .route(
-            "/ws",
-            axum::routing::get(move |ws| ws_handler(ws, tx_ws)),
+            "/refresh",
+            axum::routing::post(async || {
+                start_refresh(conf_clone)
+            }),
         )
+        .route("/ws", axum::routing::get(move |ws| ws_handler(ws, tx_ws)))
         .fallback_service(serve_dir);
 
     println!("Server running at http://localhost:3000");

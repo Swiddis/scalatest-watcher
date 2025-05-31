@@ -47,6 +47,8 @@
         state[path] = suite;
         renderTable();
       };
+
+      fetch("http://localhost:3000/refresh", { method: "POST" });
     </script>
   </body>
 </html>
