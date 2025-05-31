@@ -2,12 +2,10 @@ use chrono::Local;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Duration;
 
 #[derive(serde::Deserialize, Clone)]
 struct WatchConfig {
     pub path: String,
-    pub polling_rate_ms: Option<u64>,
 }
 
 fn handle(event: Event) {
@@ -46,7 +44,7 @@ fn watch(config: &WatchConfig, tx: Sender<notify::Result<Event>>) {
     let mut watcher = Box::new(
         RecommendedWatcher::new(
             tx,
-            Config::default().with_poll_interval(Duration::from_millis(config.polling_rate_ms.unwrap_or(1000))),
+            Config::default(),
         )
         .unwrap(),
     );
