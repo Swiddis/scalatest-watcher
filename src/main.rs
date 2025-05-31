@@ -6,6 +6,7 @@ use std::fs::OpenOptions;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::broadcast;
 
 #[derive(serde::Deserialize, Clone)]
 struct WatchConfig {
@@ -68,16 +69,35 @@ fn handle(event: Event, suites: &mut HashMap<String, TestSuites>) -> Result<(), 
     Ok(())
 }
 
-fn listen(rx: Receiver<notify::Result<Event>>) {
+fn listen(rx: Receiver<notify::Result<Event>>, tx_ws: broadcast::Sender<String>) {
     let mut suites: HashMap<String, TestSuites> = HashMap::new();
+    let mut _updates: HashMap<String, u64> = HashMap::new();
 
     loop {
-        let event = rx.recv().unwrap();
-        match event {
-            Ok(event) => handle(event, &mut suites).expect("io error while handling event"),
-            Err(e) => println!("Watch error: {:?}", e),
+        match rx.recv() {
+            Ok(Ok(event)) => {
+                if let Ok(_) = handle(event, &mut suites) {
+                    // Serialize to JSON and broadcast
+                    if let Ok(json) = serde_json::to_string(&suites) {
+                        let _ = tx_ws.send(json);
+                    }
+                }
+            }
+            Ok(Err(e)) => eprintln!("Watch error: {:?}", e),
+            Err(_) => break,
         }
     }
+}
+
+async fn ws_handler(ws: axum::extract::ws::WebSocketUpgrade, tx_ws: broadcast::Sender<String>) -> impl axum::response::IntoResponse {
+    ws.on_upgrade(move |mut socket| async move {
+        let mut rx = tx_ws.subscribe();
+        while let Ok(msg) = rx.recv().await {
+            if socket.send(axum::extract::ws::Message::Text(msg.into())).await.is_err() {
+                break;
+            }
+        }
+    })
 }
 
 fn watch(config: &WatchConfig, tx: Sender<notify::Result<Event>>) {
@@ -105,15 +125,29 @@ fn load_config() -> Result<WatchConfig, config::ConfigError> {
     settings.try_deserialize::<WatchConfig>()
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let config = load_config().unwrap();
 
     eprintln!("Starting directory watcher for: {}", config.path);
 
-    let (tx, rx) = channel();
-    watch(&config, tx);
+    let (tx_file, rx_file) = channel();
+    let (tx_ws, _) = broadcast::channel::<String>(16);
 
-    eprintln!("Press Ctrl+C to stop...");
+    std::thread::spawn(move || {
+        watch(&config, tx_file);
+    });
 
-    listen(rx);
+    let tx_ws_clone = tx_ws.clone();
+    std::thread::spawn(move || {
+        listen(rx_file, tx_ws_clone);
+    });
+
+    let app = axum::Router::new().route("/ws", axum::routing::get({
+        move |ws| ws_handler(ws, tx_ws)
+    }));
+
+    println!("Server running at http://localhost:3000");
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }

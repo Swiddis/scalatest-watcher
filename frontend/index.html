@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>JUnit Live Viewer</title>
+</head>
+<body>
+  <h1>JUnit Test Results</h1>
+  <pre id="results"></pre>
+  <script>
+    const ws = new WebSocket("ws://localhost:3000/ws");
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      document.getElementById("results").textContent = JSON.stringify(data, null, 2);
+    };
+  </script>
+</body>
+</html>
