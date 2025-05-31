@@ -1,17 +1,52 @@
 <!DOCTYPE html>
 <html>
-<head>
-  <title>JUnit Live Viewer</title>
-</head>
-<body>
-  <h1>JUnit Test Results</h1>
-  <pre id="results"></pre>
-  <script>
-    const ws = new WebSocket("ws://localhost:3000/ws");
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      document.getElementById("results").textContent = JSON.stringify(data, null, 2);
-    };
-  </script>
-</body>
+  <head>
+    <title>JUnit Live Viewer</title>
+  </head>
+  <body>
+    <h1>JUnit Test Results</h1>
+    <pre id="results-body"></pre>
+    <script>
+      const state = {};
+
+      function renderTable() {
+        const tbody = document.getElementById("results-body");
+        tbody.innerHTML = "";
+
+        for (const [path, suiteData] of Object.entries(state)) {
+          const suites = suiteData.suites || [];
+          for (const suite of suites) {
+            const cases = suite.cases || [];
+            for (const testCase of cases) {
+              const row = document.createElement("tr");
+
+              const nameCell = document.createElement("td");
+              nameCell.textContent = testCase.original_name || testCase.name;
+
+              const statusCell = document.createElement("td");
+              statusCell.textContent = testCase.status;
+              statusCell.style.color =
+                testCase.status === "Success" ? "green" : "red";
+
+              const timeCell = document.createElement("td");
+              timeCell.textContent = testCase.time;
+
+              const suiteCell = document.createElement("td");
+              suiteCell.textContent = suite.name || path;
+
+              row.append(nameCell, statusCell, timeCell, suiteCell);
+              tbody.appendChild(row);
+            }
+          }
+        }
+      }
+
+      const ws = new WebSocket("ws://localhost:3000/ws");
+      ws.onmessage = (event) => {
+        const [path, suite] = JSON.parse(event.data);
+        state[path] = suite;
+        renderTable();
+      };
+    </script>
+  </body>
 </html>

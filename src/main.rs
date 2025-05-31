@@ -34,30 +34,30 @@ fn update_suite(
     Ok(())
 }
 
-fn handle(event: Event, suites: &mut HashMap<String, TestSuites>) -> Result<(), anyhow::Error> {
+fn handle(event: &Event, suites: &mut HashMap<String, TestSuites>) -> Result<(), anyhow::Error> {
     match event.kind {
         EventKind::Modify(_) => {
-            for path in event.paths {
+            for path in event.paths.iter() {
                 if !path.is_file() {
                     continue;
                 }
 
-                update_suite(&path, suites, false)?;
+                update_suite(path, suites, false)?;
             }
         }
         // We need this to be distinct from `Modify` to avoid an infinite loop
         // of Access events causing new Access events
         EventKind::Create(_) | EventKind::Access(_) => {
-            for path in event.paths {
+            for path in event.paths.iter() {
                 if !path.is_file() {
                     continue;
                 }
 
-                update_suite(&path, suites, true)?;
+                update_suite(path, suites, true)?;
             }
         }
         EventKind::Remove(_) => {
-            for path in event.paths {
+            for path in event.paths.iter() {
                 suites.remove(&path.display().to_string());
             }
         }
@@ -71,15 +71,18 @@ fn handle(event: Event, suites: &mut HashMap<String, TestSuites>) -> Result<(), 
 
 fn listen(rx: Receiver<notify::Result<Event>>, tx_ws: broadcast::Sender<String>) {
     let mut suites: HashMap<String, TestSuites> = HashMap::new();
-    let mut _updates: HashMap<String, u64> = HashMap::new();
 
     loop {
         match rx.recv() {
             Ok(Ok(event)) => {
-                if let Ok(_) = handle(event, &mut suites) {
-                    // Serialize to JSON and broadcast
-                    if let Ok(json) = serde_json::to_string(&suites) {
-                        let _ = tx_ws.send(json);
+                if let Ok(_) = handle(&event, &mut suites) {
+                    for path in event.paths {
+                        let key = path.display().to_string();
+                        if let Some(suite) = suites.get(&key) {
+                            if let Ok(json) = serde_json::to_string(&(key, suite)) {
+                                let _ = tx_ws.send(json);
+                            }
+                        }
                     }
                 }
             }
@@ -89,11 +92,18 @@ fn listen(rx: Receiver<notify::Result<Event>>, tx_ws: broadcast::Sender<String>)
     }
 }
 
-async fn ws_handler(ws: axum::extract::ws::WebSocketUpgrade, tx_ws: broadcast::Sender<String>) -> impl axum::response::IntoResponse {
+async fn ws_handler(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    tx_ws: broadcast::Sender<String>,
+) -> impl axum::response::IntoResponse {
     ws.on_upgrade(move |mut socket| async move {
         let mut rx = tx_ws.subscribe();
         while let Ok(msg) = rx.recv().await {
-            if socket.send(axum::extract::ws::Message::Text(msg.into())).await.is_err() {
+            if socket
+                .send(axum::extract::ws::Message::Text(msg.into()))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -143,9 +153,15 @@ async fn main() {
         listen(rx_file, tx_ws_clone);
     });
 
-    let app = axum::Router::new().route("/ws", axum::routing::get({
-        move |ws| ws_handler(ws, tx_ws)
-    }));
+    let serve_dir = tower_http::services::ServeDir::new("frontend");
+
+    let app = axum::Router::new()
+        .route("/state", axum::routing::get({}))
+        .route(
+            "/ws",
+            axum::routing::get(move |ws| ws_handler(ws, tx_ws)),
+        )
+        .fallback_service(serve_dir);
 
     println!("Server running at http://localhost:3000");
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
