@@ -195,7 +195,7 @@
         updateCharts();
         setTimeout(slowPollCharts, 1000);
       }
-      slowPollCharts();
+      setTimeout(slowPollCharts, 0);
     </script>
   </body>
 </html>
